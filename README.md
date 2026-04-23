@@ -147,6 +147,11 @@ its share of requests to the dead one (LB-06). V2's chaos report (same flags,
 `--tag=v2`) is the comparison: circuit breakers should hold success > 99 %
 throughout. See `reports/README.md` for the format and comparison workflow.
 
+The committed V1 baseline lives at
+[`reports/v1-20260423T194344Z/`](reports/v1-20260423T194344Z/) — 12 000 requests
+at 200 rps over 60 s with 6 kill/revive events; 83.31 % success ratio, p99
+2.87 ms. Future runs are gitignored.
+
 ## Usage
 
 ```bash

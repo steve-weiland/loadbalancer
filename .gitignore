@@ -5,6 +5,11 @@ bin/
 .DS_Store
 .idea/
 
-# Chaos report artifacts — large binaries; keep reports/README.md and reports/.gitkeep.
+# Chaos report artifacts — large binaries; gitignored except the V1 baseline
+# referenced by spec.md §8 Acceptance. The trailing /** + chaos.log re-include
+# is needed because the top-level *.log rule otherwise shadows the whitelist.
 reports/*/
 !reports/README.md
+!reports/v1-20260423T194344Z/
+!reports/v1-20260423T194344Z/**
+!reports/v1-20260423T194344Z/chaos.log
