@@ -1,0 +1,10 @@
+Requests      [total]              12000
+Duration      [attack, wait]       59.99497575s, 1.868083ms
+Latencies     [min, mean, p50, p90, p95, p99, max]  208.208µs, 1.647475ms, 1.331544ms, 2.748665ms, 3.285219ms, 5.696765ms, 33.675584ms
+Bytes In      [total, mean]        656088, 54.67
+Bytes Out     [total, mean]        0, 0.00
+Success       [ratio]              83.30%
+Status Codes  [code:count]         map[200:9996 502:2004]
+Error Set:
+  502 Bad Gateway
+

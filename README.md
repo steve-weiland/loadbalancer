@@ -148,9 +148,10 @@ its share of requests to the dead one (LB-06). V2's chaos report (same flags,
 throughout. See `reports/README.md` for the format and comparison workflow.
 
 The committed V1 baseline lives at
-[`reports/v1-20260423T194344Z/`](reports/v1-20260423T194344Z/) — 12 000 requests
-at 200 rps over 60 s with 6 kill/revive events; 83.31 % success ratio, p99
-2.87 ms. Future runs are gitignored.
+[`reports/v1-20260423T222339Z/`](reports/v1-20260423T222339Z/) — 12 000 requests
+at 200 rps over 60 s with 6 kill/revive events on `--seed=42`; 83.30 % success
+ratio, p99 5.7 ms. The seed is captured in `seed.txt` so V2's `make chaos-v2`
+can rerun against the same kill/revive timeline. Future runs are gitignored.
 
 ## Usage
 
