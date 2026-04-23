@@ -1,4 +1,4 @@
-.PHONY: build test run run-cluster stop-cluster run-docker stop-docker chaos chaos-report clean
+.PHONY: build test run run-cluster stop-cluster run-docker stop-docker chaos chaos-v2 chaos-report clean
 
 build:
 	go build -o bin/lbserver    ./cmd/lbserver
@@ -39,7 +39,12 @@ stop-docker:
 # chaos kill/revive every 10s. Writes reports/<tag>-<timestamp>/.
 # Stop any running cluster first to free ports.
 chaos: build stop-cluster
-	./bin/chaos --tag=v1
+	./bin/chaos --tag=v1 --seed=42
+
+# V2 acceptance run — same seed as the V1 baseline so kill/revive timelines
+# align for like-for-like comparison. spec.md §8 names the thresholds.
+chaos-v2: build stop-cluster
+	./bin/chaos --tag=v2 --seed=42
 
 # Print the latest report's summary and chaos timeline.
 chaos-report:

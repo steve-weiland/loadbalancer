@@ -8,11 +8,15 @@ bin/
 # Top-level chaos binary slipped into v1.0.0 by accident; never re-track.
 /chaos
 
-# Chaos report artifacts — large binaries; gitignored except the V1 baseline
-# referenced by spec.md §8 Acceptance. The trailing /** + chaos.log re-include
-# is needed because the top-level *.log rule otherwise shadows the whitelist.
+# Chaos report artifacts — large binaries; gitignored except the two
+# committed baselines referenced by spec.md §8 Acceptance. The trailing /**
+# + chaos.log re-include is needed because the top-level *.log rule otherwise
+# shadows the whitelist.
 reports/*/
 !reports/README.md
 !reports/v1-20260423T222339Z/
 !reports/v1-20260423T222339Z/**
 !reports/v1-20260423T222339Z/chaos.log
+!reports/v2-20260423T222759Z/
+!reports/v2-20260423T222759Z/**
+!reports/v2-20260423T222759Z/chaos.log

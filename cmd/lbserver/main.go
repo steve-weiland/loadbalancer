@@ -1,6 +1,8 @@
-// Command lbserver is the V1 blind round-robin HTTP load balancer.
+// Command lbserver is the V2 health-aware, retry-capable HTTP load balancer.
 //
-//	lbserver --backends=http://b1:9001,http://b2:9001 --listen=:7080 --admin-listen=:7090
+//	lbserver --backends=http://b1:9001,http://b2:9001 \
+//	         --listen=:7080 --admin-listen=:7090 \
+//	         --max-retries=2 --retry-budget=0.10
 package main
 
 import (
@@ -10,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -19,47 +22,79 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/steve-weiland/loadbalancer/internal/admin"
+	"github.com/steve-weiland/loadbalancer/internal/backend"
+	"github.com/steve-weiland/loadbalancer/internal/breaker"
+	"github.com/steve-weiland/loadbalancer/internal/ewma"
 	"github.com/steve-weiland/loadbalancer/internal/metrics"
 	"github.com/steve-weiland/loadbalancer/internal/pool"
 	"github.com/steve-weiland/loadbalancer/internal/proxy"
+	"github.com/steve-weiland/loadbalancer/internal/retrybudget"
 )
 
 func main() {
-	var (
-		listenAddr      = flag.String("listen", ":7080", "HTTP listen address for the proxy")
-		adminListenAddr = flag.String("admin-listen", ":7090", "HTTP listen address for /healthz and /metrics")
-		backendsFlag    = flag.String("backends", "", "comma-separated backend URLs (required), e.g. http://b1:9001,http://b2:9001")
-		upstreamTimeout = flag.Duration("upstream-timeout", 5*time.Second, "time-to-first-byte timeout per upstream request")
-		logFormat       = flag.String("log-format", "json", `"json" or "text"`)
-	)
-	flag.Parse()
+	cfg := parseFlags()
 
-	log := newLogger(*logFormat)
+	log := newLogger(cfg.logFormat)
 	slog.SetDefault(log)
 
-	urls := splitCSV(*backendsFlag)
-	p, err := pool.New(urls)
+	if err := cfg.validate(); err != nil {
+		log.Error("invalid configuration", slog.Any("err", err))
+		os.Exit(2)
+	}
+
+	urls := splitCSV(cfg.backendsFlag)
+	reg := prometheus.NewRegistry()
+
+	// Chicken-and-egg: the breaker needs a transition callback that names the
+	// backend, but the *Backend struct is what owns the breaker. We resolve it
+	// by capturing a pointer-to-pointer (`&b`) inside the closure — populated
+	// after backend.New returns. Same trick for the Observer (defined below
+	// the pool, since metrics.New takes the live []*Backend).
+	var obsHolder metrics.Observer = metrics.Noop{}
+	factory := func(u *url.URL) *backend.Backend {
+		var b *backend.Backend
+		br := breaker.New(
+			breaker.Config{
+				Window:         cfg.breakerWindow,
+				ErrorThreshold: cfg.breakerErrorThresh,
+				ResetTimeout:   cfg.breakerResetTimeout,
+				ResetCap:       cfg.breakerResetCap,
+			},
+			breaker.WithOnTransition(func(from, to breaker.State) {
+				if b != nil {
+					obsHolder.RecordBreakerTransition(b.String(), from, to)
+				}
+			}),
+		)
+		b = backend.New(u, ewma.New(cfg.ewmaAlpha, cfg.upstreamTimeout), br)
+		return b
+	}
+
+	p, err := pool.New(urls, factory, 0)
 	if err != nil {
 		log.Error("invalid backend pool", slog.Any("err", err))
 		os.Exit(2) // LB-07
 	}
 
-	reg := prometheus.NewRegistry()
-	backendStrs := make([]string, 0, len(p.Backends()))
-	for _, b := range p.Backends() {
-		backendStrs = append(backendStrs, b.String())
-	}
-	obs := metrics.New(reg, backendStrs)
+	promObs := metrics.New(reg, p.Backends())
+	obsHolder = promObs // resolve the forward declaration
 
-	pr := proxy.New(p, *upstreamTimeout, obs, log)
+	budget := retrybudget.New(cfg.retryBudget)
 
-	dataSrv := &http.Server{Addr: *listenAddr, Handler: pr}
-	adminSrv := &http.Server{Addr: *adminListenAddr, Handler: admin.NewMux(reg)}
+	pr := proxy.New(p, proxy.Config{
+		UpstreamTimeout: cfg.upstreamTimeout,
+		MaxRetries:      cfg.maxRetries,
+		RetryBase:       cfg.retryBase,
+		RetryCap:        cfg.retryCap,
+	}, budget, promObs, log)
+
+	dataSrv := &http.Server{Addr: cfg.listenAddr, Handler: pr}
+	adminSrv := &http.Server{Addr: cfg.adminListenAddr, Handler: admin.NewMux(reg)}
 
 	errCh := make(chan error, 2)
 	go func() {
 		log.Info("admin listening",
-			slog.String("addr", *adminListenAddr),
+			slog.String("addr", cfg.adminListenAddr),
 			slog.String("endpoints", "/healthz, /metrics"),
 		)
 		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -68,9 +103,11 @@ func main() {
 	}()
 	go func() {
 		log.Info("proxy listening",
-			slog.String("addr", *listenAddr),
-			slog.Int("backends", len(backendStrs)),
-			slog.Duration("upstream_timeout", *upstreamTimeout),
+			slog.String("addr", cfg.listenAddr),
+			slog.Int("backends", len(p.Backends())),
+			slog.Duration("upstream_timeout", cfg.upstreamTimeout),
+			slog.Int("max_retries", cfg.maxRetries),
+			slog.Float64("retry_budget", cfg.retryBudget),
 		)
 		if err := dataSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("proxy server: %w", err)
@@ -87,11 +124,88 @@ func main() {
 		log.Error("server failure", slog.Any("err", err))
 	}
 
-	// Spec out-of-scope: no graceful drain. Close immediately.
+	// Spec out-of-scope: no graceful drain (V2 §5).
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	_ = dataSrv.Shutdown(ctx)
 	_ = adminSrv.Shutdown(ctx)
+}
+
+type config struct {
+	listenAddr      string
+	adminListenAddr string
+	backendsFlag    string
+	upstreamTimeout time.Duration
+	logFormat       string
+
+	ewmaAlpha            float64
+	breakerWindow        int
+	breakerErrorThresh   float64
+	breakerResetTimeout  time.Duration
+	breakerResetCap      time.Duration
+	maxRetries           int
+	retryBase            time.Duration
+	retryCap             time.Duration
+	retryBudget          float64
+}
+
+func parseFlags() config {
+	var c config
+	// V1 flags (preserved)
+	flag.StringVar(&c.listenAddr, "listen", ":7080", "HTTP listen address for the proxy")
+	flag.StringVar(&c.adminListenAddr, "admin-listen", ":7090", "HTTP listen address for /healthz and /metrics")
+	flag.StringVar(&c.backendsFlag, "backends", "", "comma-separated backend URLs (required)")
+	flag.DurationVar(&c.upstreamTimeout, "upstream-timeout", 5*time.Second, "TTFB timeout per upstream attempt")
+	flag.StringVar(&c.logFormat, "log-format", "json", `"json" or "text"`)
+
+	// V2 health & breaker flags
+	flag.Float64Var(&c.ewmaAlpha, "ewma-alpha", 0.1, "EWMA smoothing factor (0 < α ≤ 1)")
+	flag.IntVar(&c.breakerWindow, "breaker-window", 10, "sliding-window size for breaker error rate")
+	flag.Float64Var(&c.breakerErrorThresh, "breaker-error-threshold", 0.5, "error ratio that trips Closed → Open")
+	flag.DurationVar(&c.breakerResetTimeout, "breaker-reset-timeout", 10*time.Second, "initial Open → Half-open delay")
+	flag.DurationVar(&c.breakerResetCap, "breaker-reset-cap", 60*time.Second, "maximum Open → Half-open delay")
+
+	// V2 retry flags
+	flag.IntVar(&c.maxRetries, "max-retries", 2, "additional attempts after the first failure")
+	flag.DurationVar(&c.retryBase, "retry-base", 10*time.Millisecond, "base backoff before retry attempt 1")
+	flag.DurationVar(&c.retryCap, "retry-cap", 200*time.Millisecond, "cap on per-attempt backoff")
+	flag.Float64Var(&c.retryBudget, "retry-budget", 0.10, "fraction of total requests that may retry")
+	flag.Parse()
+	return c
+}
+
+func (c config) validate() error {
+	if c.ewmaAlpha <= 0 || c.ewmaAlpha > 1 {
+		return fmt.Errorf("--ewma-alpha must be in (0, 1], got %v", c.ewmaAlpha)
+	}
+	if c.breakerWindow < 1 {
+		return fmt.Errorf("--breaker-window must be >= 1, got %d", c.breakerWindow)
+	}
+	if c.breakerErrorThresh < 0 || c.breakerErrorThresh > 1 {
+		return fmt.Errorf("--breaker-error-threshold must be in [0, 1], got %v", c.breakerErrorThresh)
+	}
+	if c.breakerResetTimeout <= 0 {
+		return fmt.Errorf("--breaker-reset-timeout must be > 0, got %v", c.breakerResetTimeout)
+	}
+	if c.breakerResetCap < c.breakerResetTimeout {
+		return fmt.Errorf("--breaker-reset-cap (%v) must be >= --breaker-reset-timeout (%v)", c.breakerResetCap, c.breakerResetTimeout)
+	}
+	if c.maxRetries < 0 {
+		return fmt.Errorf("--max-retries must be >= 0, got %d", c.maxRetries)
+	}
+	if c.retryBase < 0 {
+		return fmt.Errorf("--retry-base must be >= 0, got %v", c.retryBase)
+	}
+	if c.retryCap < c.retryBase {
+		return fmt.Errorf("--retry-cap (%v) must be >= --retry-base (%v)", c.retryCap, c.retryBase)
+	}
+	if c.retryBudget < 0 || c.retryBudget > 1 {
+		return fmt.Errorf("--retry-budget must be in [0, 1], got %v", c.retryBudget)
+	}
+	if c.upstreamTimeout <= 0 {
+		return fmt.Errorf("--upstream-timeout must be > 0, got %v", c.upstreamTimeout)
+	}
+	return nil
 }
 
 func newLogger(format string) *slog.Logger {

@@ -53,6 +53,10 @@ func main() {
 
 	reportDir := mkReportDir(cfg)
 	fmt.Printf("report dir: %s\n", reportDir)
+	fmt.Printf("seed: %d\n", cfg.seed)
+	if err := os.WriteFile(filepath.Join(reportDir, "seed.txt"), []byte(fmt.Sprintf("%d\n", cfg.seed)), 0o644); err != nil {
+		fail("write seed.txt: %v", err)
+	}
 
 	cluster, err := startCluster(cfg)
 	if err != nil {

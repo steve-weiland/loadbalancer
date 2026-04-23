@@ -20,8 +20,8 @@ exponential backoff and full jitter, capped by a global retry budget to prevent 
 storms.
 
 V2 fixes the four deliberate weaknesses documented and measured in V1's chaos baseline
-(`reports/v1-20260423T194344Z/`, 83.31% success ratio, per-second success rate sagging
-to ~67% during single-backend kill windows):
+(`reports/v1-20260423T222339Z/`, seed=42, 83.30% success ratio, per-second success rate
+sagging to ~67% during single-backend kill windows):
 
 | V1 failure | V2 fix |
 |------------|--------|
@@ -294,20 +294,21 @@ Each of the following is an explicit non-goal of V2:
 
 V2 is *measurably* an improvement over V1, against the artifact V1 produced:
 
-**Baseline** — `reports/v1-20260423T194344Z/`:
+**Baseline** — `reports/v1-20260423T222339Z/` (seed=42, deterministic):
 
 | Metric | V1 baseline |
 |--------|-------------|
 | Requests | 12 000 |
-| Success ratio | 83.31% |
-| 502 count | 2 003 |
-| p50 latency | 0.49 ms |
-| p99 latency | 2.87 ms |
+| Success ratio | 83.30% |
+| 502 count | 2 004 |
+| p50 latency | 1.33 ms |
+| p99 latency | 5.70 ms |
 | Per-second success rate during kill window | ~0.665 (= 2/3) |
-| Chaos events in run | 3 KILL + 3 REVIVE on 10 s cadence |
+| Chaos events in run | 4 KILL + 2 REVIVE on 10 s cadence (seed-driven; deeper outage windows than the original random run) |
 
-**V2 acceptance** — `./bin/chaos --tag=v2 --seed=<v1 seed>` against the V2 implementation
-**MUST** produce a `reports/v2-<ts>/` whose `summary.txt` and `timeseries.csv` satisfy:
+**V2 acceptance** — `make chaos-v2` (which runs `./bin/chaos --tag=v2 --seed=42`)
+against the V2 implementation **MUST** produce a `reports/v2-<ts>/` whose
+`summary.txt` and `timeseries.csv` satisfy:
 
 | Criterion | Threshold | Source |
 |-----------|-----------|--------|
