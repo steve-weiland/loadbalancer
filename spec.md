@@ -2,7 +2,7 @@
 
 | Field   | Value              |
 |---------|--------------------|
-| Version | 0.2 (draft)        |
+| Version | 0.3 (draft)        |
 | Author  | Steve Weiland      |
 | Date    | 2026-04-23         |
 | Status  | In review          |
@@ -92,7 +92,10 @@ Requirements use [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) keywords: **
 | LB‑18 | The proxy **MUST** emit one structured log line per *client* request containing: ISO-8601 timestamp, method, path, terminal backend URL, terminal upstream status, total latency in milliseconds, `attempt` count (1, 2, or 3), and `backend_chain` (e.g. `b1→b2` if the first attempt failed and the second succeeded). |
 | LB‑19 | The proxy **MUST** expose `GET /metrics` on the admin listener in Prometheus text format with at minimum the metrics enumerated in LB‑52. |
 | LB‑20 | The proxy **MAY** support `--log-format=json|text` (default `json`). |
-| LB‑50 | The proxy **MUST** accept tuning flags with the defaults given in §3.4–3.5: `--ewma-alpha`, `--breaker-window`, `--breaker-error-threshold`, `--breaker-reset-timeout`, `--breaker-reset-cap`, `--max-retries`, `--retry-base`, `--retry-cap`, `--retry-budget`. |
+| LB‑25 | On `SIGINT` or `SIGTERM`, the proxy **MUST** stop accepting new connections on the data listener and wait up to `--drain-timeout` (default 30 s) for in-flight client requests to complete before exiting. The admin listener **MUST** remain available throughout the drain so health checks observing the drain can register the state change. |
+| LB‑26 | If the drain timeout elapses with requests still in flight, the proxy **MUST** force-close those connections and exit with a non-zero status; the count of forcibly-closed in-flight requests **MUST** be logged. |
+| LB‑27 | While draining, `GET /healthz` on the admin listener **MUST** return `503 Service Unavailable` with body `draining` so external load balancers (LB-of-LBs, Kubernetes readiness probes) stop sending new traffic. The endpoint **MUST** continue to be served (not refused) until process exit. |
+| LB‑50 | The proxy **MUST** accept tuning flags with the defaults given in §3.4–3.5 plus drain: `--ewma-alpha`, `--breaker-window`, `--breaker-error-threshold`, `--breaker-reset-timeout`, `--breaker-reset-cap`, `--max-retries`, `--retry-base`, `--retry-cap`, `--retry-budget`, `--drain-timeout`. |
 
 ### 3.4 Health & circuit breaking (passive)
 
@@ -243,6 +246,9 @@ GET /metrics
 --retry-base                duration base backoff before retry attempt 1          (default 10ms)
 --retry-cap                 duration cap on per-attempt backoff                   (default 200ms)
 --retry-budget              float    fraction of total requests that may retry    (default 0.10)
+
+# New in v2.1 — graceful drain
+--drain-timeout             duration max wait for in-flight requests on SIGTERM   (default 30s)
 ```
 
 ---
@@ -254,7 +260,6 @@ Each of the following is an explicit non-goal of V2:
 - **Active (out-of-band) health checks** — V2 uses passive (in-band) breaker accounting only
 - **Sticky sessions / consistent hashing** for session affinity
 - **Dynamic backend registration, deregistration, or weighting** at runtime
-- **Graceful drain** of in-flight requests on shutdown (process exits when SIGTERM received)
 - **TLS termination at the proxy or mTLS to backends**
 - **HTTP/2, gRPC, or WebSocket upgrades**
 - **Authentication, authorization, or rate limiting** at the proxy layer
@@ -287,6 +292,7 @@ Each of the following is an explicit non-goal of V2:
 |---------|------|--------|-------|
 | 0.1 | 2026-04-23 | Steve Weiland | Initial V1 draft (blind round-robin) |
 | 0.2 | 2026-04-23 | Steve Weiland | V2 draft: P2C + EWMA, per-backend circuit breakers, cross-backend retry with budget |
+| 0.3 | 2026-04-23 | Steve Weiland | v2.1: graceful drain on SIGTERM (LB-25..27), `--drain-timeout` flag |
 
 ---
 

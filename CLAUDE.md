@@ -22,7 +22,7 @@ Go 1.23+ required.
 ## Architecture
 
 ```
-cmd/lbserver/main.go         — flag parsing, validation, wiring; SIGTERM = immediate close, no drain
+cmd/lbserver/main.go         — flag parsing, validation, wiring; SIGTERM triggers graceful drain (LB-25..27)
 cmd/echobackend/main.go      — toy backend used by run-cluster + docker-compose; not part of V2 surface
 cmd/chaos/main.go            — vegeta load + kill/revive runner; spawns its own cluster, writes reports/<tag>-<ts>/{vegeta.bin,timeseries.csv,chaos.log,summary.txt,seed.txt}
 
@@ -94,6 +94,8 @@ client → lbserver :7080 → proxy.ServeHTTP
 - 502 on transport error, 504 on TTFB timeout (now: terminal *after* retries exhausted)
 - Separate admin listener
 - Empty-pool startup fail-fast
+
+**Graceful drain (v2.1)** — On SIGTERM/SIGINT, `cmd/lbserver` flips a `*atomic.Bool` so `/healthz` returns `503 draining` (LB-27), waits 100ms for an external LB to notice, then calls `dataSrv.Shutdown(ctx)` with `--drain-timeout` (default 30s). `dataSrv.ConnState` tracks active connections via an `atomic.Int64`; on timeout, the count is logged as `forcibly_closed` (LB-26) and the process exits non-zero. Admin listener stays up through the drain so health checks can observe the state change. Verified end-to-end: a 3s in-flight request completes cleanly under a 10s drain; under a 1s drain with a 5s request, the request is force-closed and `forcibly_closed=1` logged.
 
 ## Test Conventions
 

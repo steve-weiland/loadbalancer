@@ -119,6 +119,7 @@ make stop-docker
 | `--retry-base` | `10ms` | Base backoff before retry attempt 1 |
 | `--retry-cap` | `200ms` | Cap on per-attempt backoff |
 | `--retry-budget` | `0.10` | Fraction of total requests that may retry |
+| `--drain-timeout` | `30s` | Max wait for in-flight requests on SIGTERM (v2.1) |
 
 ## Test
 
@@ -183,11 +184,13 @@ for i in $(seq 1 9); do curl -s -o /dev/null -w "%{http_code} " http://localhost
 |-----|-------------|
 | `v1.0.0` | V1 complete — blind round-robin, no health awareness, no retry; baseline chaos report (seed=42) included |
 | `v2.0.0` | V2 complete — P2C + EWMA + per-backend circuit breakers + cross-backend retry with budget; acceptance chaos report (seed=42) included |
+| `v2.1.0` | Graceful drain on SIGTERM (`--drain-timeout`); `/healthz` returns 503 "draining" so external LBs can fail traffic away cleanly |
 
 ## What I'd do next
 
 - **Active health checks** as a *complement* to the breaker, for backends that go quiet but aren't dead (very low traffic, no in-band signal).
 - **`Idempotency-Key` header support** to extend retry to POST/PATCH safely.
 - **Sticky sessions via consistent hashing** for session-affinity workloads.
-- **Graceful drain on SIGTERM** — V2 still does a hard close; production proxies wait for in-flight requests to finish (with a deadline).
 - **TLS termination at the proxy** and mTLS to backends.
+- **HTTP/2, gRPC, and WebSocket upgrades** (the WebSocket+retry interaction is the interesting design problem).
+- **Multi-instance HA** — stateless N copies behind an LB-of-LBs, with per-instance retry budget cap.
