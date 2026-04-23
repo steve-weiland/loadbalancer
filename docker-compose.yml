@@ -1,0 +1,27 @@
+services:
+  backend1:
+    build: .
+    command: ["/echobackend", "--listen=:9000", "--id=backend1"]
+
+  backend2:
+    build: .
+    command: ["/echobackend", "--listen=:9000", "--id=backend2"]
+
+  backend3:
+    build: .
+    command: ["/echobackend", "--listen=:9000", "--id=backend3"]
+
+  lb:
+    build: .
+    ports:
+      - "7080:7080"   # data plane
+      - "7090:7090"   # admin: /healthz, /metrics
+    command:
+      - "/lbserver"
+      - "--listen=:7080"
+      - "--admin-listen=:7090"
+      - "--backends=http://backend1:9000,http://backend2:9000,http://backend3:9000"
+    depends_on:
+      - backend1
+      - backend2
+      - backend3

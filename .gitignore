@@ -1,0 +1,10 @@
+bin/
+.pid
+.pids
+*.log
+.DS_Store
+.idea/
+
+# Chaos report artifacts — large binaries; keep reports/README.md and reports/.gitkeep.
+reports/*/
+!reports/README.md
